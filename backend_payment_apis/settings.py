@@ -27,9 +27,11 @@ INTASEND_MODE = os.getenv('INTASEND_MODE', 'sandbox')
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Firebase
-FIREBASE_AUTH = {
-    "SERVICE_ACCOUNT_KEY": os.path.join(BASE_DIR, "backend_payment_apis/lukhu-dev-firebase-adminsdk-30g1w-114a786b55.json"),
-}
+# FIREBASE_AUTH = {
+#     "SERVICE_ACCOUNT_KEY": os.path.join(BASE_DIR, "backend_payment_apis/lukhu-dev-firebase-adminsdk-30g1w-114a786b55.json"),
+# }
+
+FIREBASE_AUTH = os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY", "")
 
 FIREBASE_SERVICE_ACCOUNT_KEY_CONTENT = os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY", "")
 
