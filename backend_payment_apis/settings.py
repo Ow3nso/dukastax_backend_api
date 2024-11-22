@@ -31,19 +31,17 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 #     "SERVICE_ACCOUNT_KEY": os.path.join(BASE_DIR, "backend_payment_apis/lukhu-dev-firebase-adminsdk-30g1w-114a786b55.json"),
 # }
 
-FIREBASE_AUTH = os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY", "")
+# FIREBASE_AUTH = os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY", "")
 
-FIREBASE_SERVICE_ACCOUNT_KEY_CONTENT = os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY", "")
+FIREBASE_SERVICE_ACCOUNT_KEY_CONTENT = os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY")
 
 if FIREBASE_SERVICE_ACCOUNT_KEY_CONTENT:
-    # Create a temporary file to store the Firebase key
-    temp_firebase_key_file = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
-    temp_firebase_key_file.write(FIREBASE_SERVICE_ACCOUNT_KEY_CONTENT.encode())
-    temp_firebase_key_file.close()
-
-    FIREBASE_AUTHENTICATION = {
-        "SERVICE_ACCOUNT_KEY": temp_firebase_key_file.name
-    }
+    try:
+        FIREBASE_AUTH = {
+            "SERVICE_ACCOUNT_KEY": json.loads(FIREBASE_SERVICE_ACCOUNT_KEY_CONTENT)
+        }
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON content in FIREBASE_SERVICE_ACCOUNT_KEY: {e}")
 else:
     raise ValueError("Firebase service account key is missing. Check your environment variables.")
 
