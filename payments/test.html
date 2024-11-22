@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test DRF GET API Endpoint</title>
+</head>
+<body>
+    <h1>Test DRF GET API Endpoint</h1>
+    <button onclick="testApi()">Test API</button>
+    <pre id="response"></pre>
+
+    <script>
+        function testApi() {
+            const url = 'http://192.168.113.130:8000/api/payments/balance';
+            fetch(url)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok ' + response.statusText);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    document.getElementById('response').innerText = JSON.stringify(data, null, 2);
+                })
+                .catch(error => {
+                    document.getElementById('response').innerText = 'Error: ' + error;
+                });
+        }
+    </script>
+</body>
+</html>

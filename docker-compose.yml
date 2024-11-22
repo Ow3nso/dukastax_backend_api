@@ -1,0 +1,46 @@
+version: '3'
+
+services:
+  web:
+    build: .
+    command: gunicorn --workers 3 --bind 0.0.0.0:8000 backend_payment_apis.wsgi:application
+    volumes:
+      - .:/backend
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+      - rabbitmq2
+
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+
+  rabbitmq2:
+    image: rabbitmq:3-management
+    ports:
+      - "5671:5671"  # AMQP protocol
+      - "15671:15671"  # Management UI
+
+  celery:
+    build: .
+    command: celery -A backend_payment_apis worker --loglevel=info
+    environment:
+      - CELERY_BROKER_URL=amqps://joagpfii:nR7SGqulBoTMBp4M-VtcO1Gpu7ItGWIC@toad.rmq.cloudamqp.com/joagpfii
+    volumes:
+      - .:/backend
+    depends_on:
+      - redis
+      - rabbitmq2
+
+  celery-beat:
+    build: .
+    command: celery -A backend_payment_apis beat --loglevel=info
+    volumes:
+      - .:/backend
+    environment:
+      - CELERY_BROKER_URL=amqps://joagpfii:nR7SGqulBoTMBp4M-VtcO1Gpu7ItGWIC@toad.rmq.cloudamqp.com/joagpfii
+    depends_on:
+      - redis
+      - rabbitmq2
