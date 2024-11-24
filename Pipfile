@@ -68,6 +68,8 @@ python-crontab = "==3.2.0"
 rsa = "==4.9"
 uritemplate = "==4.1.1"
 django-environ = "*"
+dj-database-url = "*"
+psycopg2-binary = "*"
 
 [dev-packages]
 

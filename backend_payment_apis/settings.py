@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/5.0/ref/settings/
 import os
 import json
 import tempfile
+import dj_database_url
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -140,11 +141,15 @@ WSGI_APPLICATION = "backend_payment_apis.wsgi.application"
 # Database
 # https://docs.djangoproject.com/en/5.0/ref/settings/#databases
 
+# DATABASES = {
+#     "default": {
+#         "ENGINE": "django.db.backends.sqlite3",
+#         "NAME": BASE_DIR / "db.sqlite3",
+#     }
+# }
+
 DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
-    }
+    "default":dj_database_url.parse(os.getenv("DATABASE_URL"))
 }
 
 
