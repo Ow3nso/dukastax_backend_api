@@ -34,17 +34,17 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # FIREBASE_AUTH = os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY", "")
 
-FIREBASE_SERVICE_ACCOUNT_KEY_CONTENT = os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY")
+# FIREBASE_SERVICE_ACCOUNT_KEY_CONTENT = os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY")
 
-if FIREBASE_SERVICE_ACCOUNT_KEY_CONTENT:
-    try:
-        FIREBASE_AUTH = {
-            "SERVICE_ACCOUNT_KEY": json.loads(FIREBASE_SERVICE_ACCOUNT_KEY_CONTENT)
-        }
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON content in FIREBASE_SERVICE_ACCOUNT_KEY: {e}")
-else:
-    raise ValueError("Firebase service account key is missing. Check your environment variables.")
+# if FIREBASE_SERVICE_ACCOUNT_KEY_CONTENT:
+#     try:
+#         FIREBASE_AUTH = {
+#             "SERVICE_ACCOUNT_KEY": json.loads(FIREBASE_SERVICE_ACCOUNT_KEY_CONTENT)
+#         }
+#     except json.JSONDecodeError as e:
+#         raise ValueError(f"Invalid JSON content in FIREBASE_SERVICE_ACCOUNT_KEY: {e}")
+# else:
+#     raise ValueError("Firebase service account key is missing. Check your environment variables.")
 
 
 # Firestore
