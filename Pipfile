@@ -70,6 +70,7 @@ uritemplate = "==4.1.1"
 django-environ = "*"
 dj-database-url = "*"
 psycopg2-binary = "*"
+drf-yasg = "*"
 
 [dev-packages]
 

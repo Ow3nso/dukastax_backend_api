@@ -16,6 +16,9 @@ import dj_database_url
 from pathlib import Path
 from dotenv import load_dotenv
 
+from drf_yasg.views import get_schema_view
+from drf_yasg import openapi
+
 load_dotenv()
 
 # intasend configuration
@@ -76,6 +79,7 @@ INSTALLED_APPS = [
     "corsheaders",
     "payments",
     'django_celery_beat',
+    'drf_yasg',
 ]
 
 MIDDLEWARE = [
@@ -170,6 +174,29 @@ AUTH_PASSWORD_VALIDATORS = [
         "NAME": "django.contrib.auth.password_validation.NumericPasswordValidator",
     },
 ]
+
+schema_view = get_schema_view(
+    openapi.Info(
+        title="Dukastax API",
+        default_version='v1',
+        description="API documentation with JWT authentication",
+    ),
+    public=True,
+    authentication_classes=[],  # Add your authentication classes here if necessary
+    permission_classes=[],  # Add your permission classes here
+)
+
+swagger_settings = {
+    'SECURITY_DEFINITIONS': {
+        'Bearer': {
+            'type': 'apiKey',
+            'in': 'header',
+            'name': 'Authorization',
+            'description': 'JWT Authorization header using the Bearer scheme. Example: "Authorization: Bearer {token}"',
+        },
+    },
+    'DEFAULT_SECURITY': [{'Bearer': []}],
+}
 
 
 # Internationalization

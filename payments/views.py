@@ -19,6 +19,9 @@ from rest_framework import status
 from dotenv import load_dotenv
 from firebase_admin import auth
 
+from drf_yasg import openapi
+from drf_yasg.utils import swagger_auto_schema
+
 from intasend import APIService
 
 # ----- In-Built Libraries -----
@@ -30,6 +33,67 @@ intasend_secret_api_key = os.getenv('INTASEND_SECRET_API_KEY')
 intasend_public_api_key = os.getenv('INTASEND_PUBLIC_API_KEY')
 
 load_dotenv()
+
+def generate_swagger_schema(
+    operation_description, 
+    request_fields=None, 
+    required_request_fields=None, 
+    response_fields=None, 
+    response_example=None
+):
+    """
+    Generate a reusable Swagger schema decorator.
+
+    Args:
+        operation_description (str): Description of the operation.
+        request_fields (dict): Request body fields with details.
+        required_request_fields (list, optional): List of required request fields. Defaults to [].
+        response_fields (dict, optional): Response body fields with details. Defaults to None.
+        response_example (dict, optional): Example of the response body. Defaults to None.
+
+    Returns:
+        swagger_auto_schema: A DRF-YASG schema decorator.
+    """
+    required_request_fields = required_request_fields or []
+    
+    # Create request properties
+    request_properties = {
+        field_name: openapi.Schema(**field_details)
+        for field_name, field_details in (request_fields or {}).items()
+    }
+    
+    # Create response schema
+    response_schema = None
+    if response_fields:
+        response_properties = {
+            field_name: openapi.Schema(**field_details)
+            for field_name, field_details in response_fields.items()
+        }
+        response_schema = openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties=response_properties,
+        )
+    
+    return swagger_auto_schema(
+        operation_description=operation_description,
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties=request_properties,
+            required=required_request_fields,
+        ) if request_fields else None,
+        responses={
+            200: openapi.Response(
+                description="Success",
+                schema=response_schema,
+                examples={"application/json": response_example} if response_example else None
+            ),
+            201: "Created",
+            400: "Bad Request",
+            401: "Unauthorized",
+        }
+    )
+
+
 
 # ----- Time Formart Conversion -----
 def convert_firestore_data(doc):
@@ -81,6 +145,57 @@ class FirebaseAuthenticationMixin:
 
 # ----- Views -----
 class DepositView(FirebaseAuthenticationMixin, APIView):
+
+    @generate_swagger_schema(
+        operation_description="Wallet mobile money deposit endpoint",
+        request_fields={
+            'amount': {'type': openapi.TYPE_INTEGER,'description': "Amount to be deposited into the account"},
+            'currency': {'type': openapi.TYPE_STRING,'description': "KES"},
+            'phone_number': {'type': openapi.TYPE_INTEGER,'description': "Users phone number to enable stk push"},
+            'transaction_type': {'type': openapi.TYPE_STRING,'description': "Can either be by M-PESA or CARD"},
+            'description': {'type': openapi.TYPE_STRING, 'description': "Description / reason for example topup",},
+            'shopId': {'type': openapi.TYPE_STRING, 'description': "User's ShopId",},
+            'metadata': {
+                'type': openapi.TYPE_ARRAY,
+                'description': "An array of values for example transaction top up",
+                'items': openapi.Items(type=openapi.TYPE_STRING),
+            },
+            'walletId': {'type': openapi.TYPE_STRING, 'description': "Users WalletId"},
+            'userId': {'type': openapi.TYPE_STRING,'description': "Unique identification of the user"},
+            
+        },
+        required_request_fields=['userId', 'walletId', 'shopId', 'amount', 'phone_number', 'transaction_type', 'currency'],
+        # response_fields={
+        #     'amount': {'type': openapi.TYPE_INTEGER,'description': "Amount to be deposited into the account"},
+        #     'currency': {'type': openapi.TYPE_STRING,'description': "KES"},
+        #     'phone_number': {'type': openapi.TYPE_INTEGER,'description': "Users phone number to enable stk push"},
+        #     'transaction_type': {'type': openapi.TYPE_STRING,'description': "Can either be by M-PESA or CARD"},
+        #     'description': {'type': openapi.TYPE_STRING, 'description': "Description / reason for example topup",},
+        #     'shopId': {'type': openapi.TYPE_STRING, 'description': "User's ShopId",},
+        #     'metadata': {
+        #         'type': openapi.TYPE_ARRAY,
+        #         'description': "Description of Field B",
+        #         'items': openapi.Items(type=openapi.TYPE_STRING),
+        #     },
+        #     'walletId': {'type': openapi.TYPE_STRING, 'description': "Users WalletId"},
+        #     'userId': {'type': openapi.TYPE_STRING,'description': "Unique identification of the user"},
+        # },
+        response_example={
+            "id": 1,
+            "amount": "5",
+            "currency": "KES",
+            "description":"Top Up",
+            "invoiceId": "YSHGD67",
+            "phone_number":"25472345678",
+            "status":"COMPLETE",
+            "metadata": {"transaction":"topup"},
+            "transcation_type":"M-PESA",
+            "userId":"1",
+            "walletId":"1",
+            "shopId":"1",
+        }
+    )
+
     def post(self, request):
         try:
             # Get userId from Firebase JWT (from the authenticated user)
@@ -182,6 +297,51 @@ class DepositView(FirebaseAuthenticationMixin, APIView):
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class ProcessOrderView(FirebaseAuthenticationMixin, APIView):
+    @generate_swagger_schema(
+        operation_description="API endpoint to process order payment and checkout through mobile money stk push",
+        request_fields={
+            'amount': {'type': openapi.TYPE_INTEGER,'description': "Amount to be deposited into the account"},
+            'currency': {'type': openapi.TYPE_STRING,'description': "KES"},
+            'phone_number': {'type': openapi.TYPE_INTEGER,'description': "Users phone number to enable stk push"},
+            'transaction_type': {'type': openapi.TYPE_STRING,'description': "Can either be by M-PESA or CARD"},
+            'description': {'type': openapi.TYPE_STRING, 'description': "Description / reason for example topup",},
+            'shopId': {'type': openapi.TYPE_STRING, 'description': "User's ShopId",},
+            'metadata': {
+                'type': openapi.TYPE_ARRAY,
+                'description': "An array of values for example transaction top up",
+                'items': openapi.Items(type=openapi.TYPE_STRING),
+            },
+            'imageUrl': {'type': openapi.TYPE_STRING, 'description': "Image of the item being ordered"},
+            'walletId': {'type': openapi.TYPE_STRING, 'description': "Users WalletId"},
+            'userId': {'type': openapi.TYPE_STRING,'description': "Unique identification of the user"},
+            'name': {'type': openapi.TYPE_STRING, 'description': "Full name of the customer"},
+            'orderId': {'type': openapi.TYPE_STRING, 'description': "Unique identification of an order by its id"},
+            'customerId': {'type': openapi.TYPE_STRING, 'description': "Customer unique id"},
+            'items': {'type': openapi.TYPE_STRING, 'description': "Users WalletId"},
+            'statusType': {'type': openapi.TYPE_STRING, 'description': "The status of a transcation / order payment which can either be pending, ontransit, delivered, etc"},
+        },
+        # required_request_fields=lambda fields: list(fields.keys()),
+        response_example={
+            "id": 1,
+            "transctionId":"1",
+            "amount": "5",
+            "currency": "KES",
+            "description":"Top Up",
+            "invoiceId": "YSHGD67",
+            "phone_number":"25472345678",
+            "status":"COMPLETE",
+            "metadata": {"type":"pending"},
+            "imageUrl":"https://image.com/",
+            "transcation_type":"M-PESA",
+            "userId":"1",
+            "walletId":"1",
+            "shopId":"1",
+            "name":"James Doe",
+            "orderId":"1",
+            "customerId":"1",
+            "statusType":"pending"
+        }
+    )
     def post(self, request):
         try:
             firebase_user = request.firebase_user
@@ -304,6 +464,17 @@ class ProcessOrderView(FirebaseAuthenticationMixin, APIView):
 
 # ----- Balance View -----
 class BalanceView(FirebaseAuthenticationMixin, APIView):
+    @generate_swagger_schema(
+        operation_description="API endpoint to request and check the available and pending balance of a user",
+        response_example={
+            "userId":"1",
+            "walletId":"1",
+            "shopId":"1",
+            "availableBalance":2000.00,
+            "pendingBalance":500.00,
+            "currency":"KES",
+        }
+    )
     def get(self, request):
         try:
             # get userId
@@ -345,6 +516,29 @@ class BalanceView(FirebaseAuthenticationMixin, APIView):
 
 # ----- Transactions View -----
 class TransactionView(FirebaseAuthenticationMixin, APIView):
+    @generate_swagger_schema(
+        operation_description="API endpoint to get all the transaction performed by a user",
+        response_example={
+            "id": 1,
+            "transctionId":"1",
+            "amount": "5",
+            "currency": "KES",
+            "description":"Top Up",
+            "invoiceId": "YSHGD67",
+            "phone_number":"25472345678",
+            "status":"COMPLETE",
+            "metadata": {"type":"pending"},
+            "imageUrl":"https://image.com/",
+            "transcation_type":"M-PESA",
+            "userId":"1",
+            "walletId":"1",
+            "shopId":"1",
+            "name":"James Doe",
+            "orderId":"1",
+            "customerId":"1",
+            "statusType":"pending"
+        }
+    )
     def get(self, request):
         try:
             # Get the user's Firebase UID from the decoded token
@@ -379,6 +573,40 @@ class TransactionView(FirebaseAuthenticationMixin, APIView):
 
 # ----- withdraw from wallet -----
 class WithdrawalView(FirebaseAuthenticationMixin, APIView):
+    @generate_swagger_schema(
+        operation_description="API endpoint to make a withdrawal request",
+        request_fields={
+            'amount': {'type': openapi.TYPE_INTEGER,'description': "Amount to be deposited into the account"},
+            'currency': {'type': openapi.TYPE_STRING,'description': "KES"},
+            'account': {'type': openapi.TYPE_INTEGER,'description': "Users phone number to enable stk push"},
+            'transaction_type': {'type': openapi.TYPE_STRING,'description': "M-PESA"},
+            'description': {'type': openapi.TYPE_STRING, 'description': "Description / reason for example Withdrawal",},
+            'shopId': {'type': openapi.TYPE_STRING, 'description': "User's ShopId",},
+            'metadata': {
+                'type': openapi.TYPE_ARRAY,
+                'description': "An array of values for example transaction withdrawal",
+                'items': openapi.Items(type=openapi.TYPE_STRING),
+            },
+            'walletId': {'type': openapi.TYPE_STRING, 'description': "Users WalletId"},
+            'userId': {'type': openapi.TYPE_STRING,'description': "Unique identification of the user"},
+            
+        },
+        # required_request_fields=['userId', 'walletId', 'shopId', 'amount', 'phone_number', 'transaction_type', 'currency'],
+        response_example={
+            "id": 1,
+            "amount": "15",
+            "currency": "KES",
+            "description":"Withdrawal",
+            "invoiceId": "YSHGD67",
+            "account":"25472345678",
+            "status":"COMPLETE",
+            "metadata": {"transaction":"withdraw"},
+            "transcation_type":"M-PESA",
+            "userId":"1",
+            "walletId":"1",
+            "shopId":"1",
+        }
+    )
     def post(self, request):
         # variables
         intasend_url = "https://api.intasend.com/api/v1/send-money/initiate/"
@@ -523,6 +751,38 @@ class WithdrawalView(FirebaseAuthenticationMixin, APIView):
 
 # ----- Deposit with Card -----
 class CardDepositView(FirebaseAuthenticationMixin, APIView):
+    @generate_swagger_schema(
+        operation_description="Wallet Card deposit endpoint",
+        request_fields={
+            'amount': {'type': openapi.TYPE_INTEGER,'description': "Amount to be deposited into the account"},
+            'currency': {'type': openapi.TYPE_STRING,'description': "KES"},
+            'transaction_type': {'type': openapi.TYPE_STRING,'description': "CARD-PAYMENT"},
+            'description': {'type': openapi.TYPE_STRING, 'description': "Description / reason for example topup",},
+            'shopId': {'type': openapi.TYPE_STRING, 'description': "User's ShopId",},
+            'metadata': {
+                'type': openapi.TYPE_ARRAY,
+                'description': "An array of values for example transaction top up",
+                'items': openapi.Items(type=openapi.TYPE_STRING),
+            },
+            'walletId': {'type': openapi.TYPE_STRING, 'description': "Users WalletId"},
+            'userId': {'type': openapi.TYPE_STRING,'description': "Unique identification of the user"},
+            
+        },
+        # required_request_fields=lambda fields: list(fields.keys()),
+        response_example={
+            "id": 1,
+            "amount": "5",
+            "currency": "KES",
+            "description":"Top Up",
+            "invoiceId": "YSHGD67",
+            "status":"COMPLETE",
+            "metadata": {"transaction":"topup"},
+            "transcation_type":"CARD_PAYMENT",
+            "userId":"1",
+            "walletId":"1",
+            "shopId":"1",
+        }
+    )
     def post(self, request):
         # Prepare data for IntaSend API
         firebase_user = request.firebase_user
@@ -602,6 +862,14 @@ class CardDepositView(FirebaseAuthenticationMixin, APIView):
 
 # Check if Card Deposit is Successfull
 class CheckoutStatus(FirebaseAuthenticationMixin, APIView):
+    @generate_swagger_schema(
+        operation_description="API endpoint to check if Card Deposit is successfull",
+        request_fields={
+            'checkout_id': {'type': openapi.TYPE_STRING,'description': "checkout id generated from the card deposit transaction"},
+            'signature': {'type': openapi.TYPE_STRING,'description': "unique signature generated from the card deposit transaction"},
+        },
+        # required_request_fields=lambda fields: list(fields.keys()),
+    )
     def post(self, request):
         # prepare checkout details
         firebase_user = request.firebase_user
@@ -633,6 +901,29 @@ class CheckoutStatus(FirebaseAuthenticationMixin, APIView):
             return Response(data, status=response.status_code)
 
 class TransactionDetailView(FirebaseAuthenticationMixin, APIView):
+    @generate_swagger_schema(
+        operation_description="API endpoint to check a specific transaction of a user by its ID in detail",
+        response_example={
+            "id": 1,
+            "transctionId":"1",
+            "amount": "5",
+            "currency": "KES",
+            "description":"Top Up",
+            "invoiceId": "YSHGD67",
+            "phone_number":"25472345678",
+            "status":"COMPLETE",
+            "metadata": {"type":"pending"},
+            "imageUrl":"https://image.com/",
+            "transcation_type":"M-PESA",
+            "userId":"1",
+            "walletId":"1",
+            "shopId":"1",
+            "name":"James Doe",
+            "orderId":"1",
+            "customerId":"1",
+            "statusType":"pending"
+        }
+    )
     def get(self, request, transaction_id):
         try:
             firebase_user = request.firebase_user
