@@ -12,6 +12,8 @@ from django.apps import apps
 from django.conf import settings
 from django.http import JsonResponse
 from django.shortcuts import render
+from django.utils import timezone
+from datetime import timedelta, datetime
 from google.cloud import firestore
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -461,29 +463,35 @@ class ProcessOrderView(FirebaseAuthenticationMixin, APIView):
         except Exception as e:
             raise e
 
-
-# ----- Balance View -----
+# ---------------------Balance View ---------
 class BalanceView(FirebaseAuthenticationMixin, APIView):
     @generate_swagger_schema(
-        operation_description="API endpoint to request and check the available and pending balance of a user",
+        operation_description="API endpoint to request and check the available and pending balance of a user, and calculate income overview for a specific period.",
         response_example={
-            "userId":"1",
-            "walletId":"1",
-            "shopId":"1",
-            "availableBalance":2000.00,
-            "pendingBalance":500.00,
-            "currency":"KES",
+            "userId": "1",
+            "walletId": "1",
+            "shopId": "1",
+            "availableBalance": 2000.00,
+            "pendingBalance": 500.00,
+            "currency": "KES",
+            "incomeOverview": 1000.00,
+            "incomeComparison": "14% higher than last week",
         }
     )
     def get(self, request):
         try:
-            # get userId
+            # Get userId
             firebase_user = request.firebase_user
             user_id = firebase_user.get('uid')  # Access the 'uid' of the authenticated user
 
             if not user_id:
                 return Response({'error': 'userId is required'}, status=400)
-            
+
+            # Get the period from query parameters
+            period = request.query_params.get('period', 'today')  # Default to 'today'
+            custom_start_date = request.query_params.get('start_date')
+            custom_end_date = request.query_params.get('end_date')
+
             # Initialize Firestore client from Django app config
             firestore_client = apps.get_app_config('payments').firestore_client
 
@@ -494,25 +502,96 @@ class BalanceView(FirebaseAuthenticationMixin, APIView):
             # Convert Firestore documents to a list of transaction dictionaries
             transactions = [doc.to_dict() for doc in docs]
 
-            # Calculate the balance using the provided method
+            # Calculate available and pending balances
             availableBalance = (
                 sum(float(transaction.get('amount', 0)) for transaction in transactions if transaction.get('status') == "COMPLETE" and transaction.get('metadata', {}).get('transaction') == "topup") -
                 sum(float(transaction.get('amount', 0)) for transaction in transactions if transaction.get('status') == "COMPLETE" and transaction.get('metadata', {}).get('transaction') == "withdraw")
             )
             pendingBalance = (
-                sum(float(transaction.get('amount', 0)) for transaction in transactions if transaction.get('status') == "COMPLETE" and transaction.get('metadata', {}).get('type') == "pending")
+                sum(float(transaction.get('amount', 0)) for transaction in transactions if transaction.get('status') == "PENDING")
             )
+
+            # Helper function to calculate start and end dates based on the period
+            def get_date_range(period, custom_start_date=None, custom_end_date=None):
+                now = timezone.now()
+                if period == 'today':
+                    start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                    end_date = now
+                elif period == 'yesterday':
+                    start_date = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+                    end_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                elif period == 'this_week':
+                    start_date = now - timedelta(days=now.weekday())
+                    start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
+                    end_date = now
+                elif period == 'last_7_days':
+                    start_date = now - timedelta(days=7)
+                    end_date = now
+                elif period == 'last_30_days':
+                    start_date = now - timedelta(days=30)
+                    end_date = now
+                elif period == 'last_6_months':
+                    start_date = now - timedelta(days=180)
+                    end_date = now
+                elif period == 'last_1_year':
+                    start_date = now - timedelta(days=365)
+                    end_date = now
+                elif period == 'custom' and custom_start_date and custom_end_date:
+                    start_date = datetime.strptime(custom_start_date, '%Y-%m-%d')
+                    end_date = datetime.strptime(custom_end_date, '%Y-%m-%d')
+                else:
+                    raise ValueError("Invalid period or missing custom date range")
+
+                return start_date, end_date
+
+            # Calculate income overview for the specified period
+            def calculate_income_overview(transactions, start_date, end_date):
+                # Filter transactions within the specified period
+                filtered_transactions = [
+                    t for t in transactions
+                    if start_date <= t.get('timestamp') <= end_date
+                ]
+
+                # Calculate total top-ups and withdrawals
+                total_topups = sum(
+                    float(t.get('amount', 0)) for t in filtered_transactions
+                    if t.get('status') == "COMPLETE" and t.get('metadata', {}).get('transaction') == "topup"
+                )
+                total_withdrawals = sum(
+                    float(t.get('amount', 0)) for t in filtered_transactions
+                    if t.get('status') == "COMPLETE" and t.get('metadata', {}).get('transaction') == "withdraw"
+                )
+
+                # Calculate net change in available balance
+                net_change = availableBalance - sum(
+                    float(t.get('amount', 0)) for t in filtered_transactions
+                    if t.get('status') == "COMPLETE" and t.get('metadata', {}).get('transaction') == "topup"
+                )
+
+                # Income overview formula
+                income_overview = (net_change + total_withdrawals) - total_topups
+                return income_overview
+
+            # Get date range for the specified period
+            start_date, end_date = get_date_range(period, custom_start_date, custom_end_date)
+
+            # Calculate income overview for the specified period
+            income_overview = calculate_income_overview(transactions, start_date, end_date)
 
             return Response(
                 {
                     'availableBalance': availableBalance,
-                    'pendingBalance':pendingBalance
+                    'pendingBalance': pendingBalance,
+                    'incomeOverview': income_overview,
+                    'period': period,
+                    'start_date': start_date.strftime('%Y-%m-%d'),
+                    'end_date': end_date.strftime('%Y-%m-%d'),
                 },
             )
 
-        # error handling
+        # Error handling
         except Exception as e:
-            raise e
+            return Response({'error': str(e)}, status=400)
 
 # ----- Transactions View -----
 class TransactionView(FirebaseAuthenticationMixin, APIView):
