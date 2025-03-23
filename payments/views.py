@@ -40,7 +40,7 @@ from .serializers import *
 # ----- API KEY Variables -----
 intasend_secret_api_key = os.getenv('INTASEND_SECRET_API_KEY')
 intasend_public_api_key = os.getenv('INTASEND_PUBLIC_API_KEY')
-FIREBASE_WEB_API_KEY = "AIzaSyCPr-N51X3rR1IcBFUUXgvKWTS0zIzRviI"
+FIREBASE_WEB_API_KEY = os.getenv('FIREBASE_WEB_API_KEY')
 
 load_dotenv()
 

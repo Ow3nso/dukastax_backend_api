@@ -6,7 +6,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 
-from firebase_admin import auth
+import bcrypt  # Import bcrypt for password hashing
 
 # ----- In-Built Libraries -----
 from .serializers import *
@@ -21,9 +21,12 @@ class SavePinView(APIView):
             pin = serializer.validated_data['pin']
             user_id = serializer.validated_data['user_id']
 
+            # Hash the PIN before saving
+            hashed_pin = bcrypt.hashpw(pin.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
             try:
                 firestore_client.collection('users_store_pin').document(str(user_id)).set({
-                    'pin': pin
+                    'pin': hashed_pin
                 }, merge=True)
                 return Response({"message": "PIN saved successfully"}, status=status.HTTP_200_OK)
             except Exception as e:
@@ -44,9 +47,10 @@ class ConfirmPinView(APIView):
             user_doc = firestore_client.collection('users_store_pin').document(str(user_id)).get()
 
             if user_doc.exists:
-                stored_pin = user_doc.to_dict().get('pin')
+                stored_hashed_pin = user_doc.to_dict().get('pin')
 
-                if stored_pin == pin:
+                # Compare the provided PIN with the stored hashed PIN
+                if bcrypt.checkpw(pin.encode('utf-8'), stored_hashed_pin.encode('utf-8')):
                     return Response({"message": "PIN confirmed. Access granted."}, status=status.HTTP_200_OK)
                 else:
                     return Response({"error": "Incorrect PIN."}, status=status.HTTP_403_FORBIDDEN)
