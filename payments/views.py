@@ -6,6 +6,7 @@ import uuid
 import datetime
 import subprocess
 import requests
+import logging
 
 from decimal import Decimal
 from django.apps import apps
@@ -13,13 +14,18 @@ from django.conf import settings
 from django.http import JsonResponse
 from django.shortcuts import render
 from django.utils import timezone
+from django.utils.timezone import now
+from django.views.decorators.csrf import csrf_exempt
 from datetime import timedelta, datetime
+from google.protobuf.timestamp_pb2 import Timestamp
 from google.cloud import firestore
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.pagination import PageNumberPagination
 from dotenv import load_dotenv
 from firebase_admin import auth
+from datetime import datetime  # Ensure datetime is imported
 
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
@@ -27,14 +33,31 @@ from drf_yasg.utils import swagger_auto_schema
 from intasend import APIService
 
 # ----- In-Built Libraries -----
+# from .tasks import check_transaction_status
 from .models import Transactions
 from .serializers import *
 
 # ----- API KEY Variables -----
 intasend_secret_api_key = os.getenv('INTASEND_SECRET_API_KEY')
 intasend_public_api_key = os.getenv('INTASEND_PUBLIC_API_KEY')
+FIREBASE_WEB_API_KEY = "AIzaSyCPr-N51X3rR1IcBFUUXgvKWTS0zIzRviI"
 
 load_dotenv()
+
+# Configure the logger
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)  # Set the logging level
+
+# Create a console handler and set the level to DEBUG
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.DEBUG)
+
+# Create a formatter and add it to the handler
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+console_handler.setFormatter(formatter)
+
+# Add the handler to the logger
+logger.addHandler(console_handler)
 
 def generate_swagger_schema(
     operation_description, 
@@ -128,6 +151,8 @@ class DateTimeEncoder(json.JSONEncoder):
 
         return super().default(obj)
 
+
+
 class FirebaseAuthenticationMixin:
     def dispatch(self, request, *args, **kwargs):
         auth_header = request.headers.get('Authorization')
@@ -146,6 +171,114 @@ class FirebaseAuthenticationMixin:
 
 
 # ----- Views -----
+
+class TransactionPagination(PageNumberPagination):
+    page_size = 10  # Number of transactions per page
+    page_size_query_param = 'page_size'  # Allow client to override the page size
+    max_page_size = 100  # Maximum limit for page size
+
+def calculate_income_overview(transactions, start_date, end_date, availableBalance):
+    # Filter transactions within the specified period and with valid timestamps
+    filtered_transactions = []
+    for t in transactions:
+        if t.get('createdAt') is not None:
+            # Convert createdAt to datetime if it is a string in ISO 8601 format
+            if isinstance(t['createdAt'], str):
+                try:
+                    t['createdAt'] = datetime.fromisoformat(t['createdAt'])
+                except ValueError as e:
+                    logger.warning(f"Failed to parse createdAt: {t['createdAt']}. Error: {e}")
+                    continue  # Skip this transaction if parsing fails
+
+            # Ensure createdAt is a datetime object
+            if isinstance(t['createdAt'], datetime):
+                if start_date <= t['createdAt'] <= end_date:
+                    filtered_transactions.append(t)
+            else:
+                logger.warning(f"Invalid createdAt type: {type(t['createdAt'])}. Expected datetime.")
+
+    # Calculate total top-ups and withdrawals
+    total_topups = sum(
+        float(t.get('amount', 0)) for t in filtered_transactions
+        if t.get('status') == "COMPLETE" and t.get('metadata', {}).get('transaction') == "topup"
+    )
+    total_withdrawals = sum(
+        float(t.get('amount', 0)) for t in filtered_transactions
+        if t.get('status') == "COMPLETE" and t.get('metadata', {}).get('transaction') == "withdraw"
+    )
+
+    # Calculate net change in available balance
+    net_change = availableBalance - sum(
+        float(t.get('amount', 0)) for t in filtered_transactions
+        if t.get('status') == "COMPLETE" and t.get('metadata', {}).get('transaction') == "topup"
+    )
+
+    # Income overview formula
+    income_overview = (net_change + total_withdrawals) - total_topups
+    return income_overview
+
+@csrf_exempt
+def signup(request):
+    if request.method == "POST":
+        try:
+            data = json.loads(request.body)
+            email = data.get("email")
+            password = data.get("password")
+            display_name = data.get("display_name", "")
+
+            if not email or not password:
+                return JsonResponse({"error": "Email and password are required"}, status=400)
+
+            # Create user in Firebase
+            user = auth.create_user(email=email, password=password, display_name=display_name)
+
+            return JsonResponse({"message": "User created successfully", "uid": user.uid}, status=201)
+        
+        except Exception as e:
+            return JsonResponse({"error": str(e)}, status=400)
+
+    return JsonResponse({"error": "Invalid request method"}, status=405)
+
+@csrf_exempt
+def login(request):
+    if request.method == "POST":
+        try:
+            data = json.loads(request.body)
+            email = data.get("email")
+            password = data.get("password")
+
+            if not email or not password:
+                return JsonResponse({"error": "Email and password are required"}, status=400)
+
+            # Firebase REST API endpoint for signing in users
+            url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={FIREBASE_WEB_API_KEY}"
+            payload = {
+                "email": email,
+                "password": password,
+                "returnSecureToken": True
+            }
+            headers = {"Content-Type": "application/json"}
+
+            # Send POST request to Firebase Authentication REST API
+            response = requests.post(url, data=json.dumps(payload), headers=headers)
+            result = response.json()
+
+            if "idToken" in result:
+                return JsonResponse({
+                    "message": "Login successful",
+                    "idToken": result["idToken"],
+                    "refreshToken": result["refreshToken"],
+                    "expiresIn": result["expiresIn"]
+                }, status=200)
+            else:
+                return JsonResponse({"error": result.get("error", "Invalid credentials")}, status=400)
+
+        except Exception as e:
+            return JsonResponse({"error": str(e)}, status=400)
+
+    return JsonResponse({"error": "Invalid request method"}, status=405)
+
+
 class DepositView(FirebaseAuthenticationMixin, APIView):
 
     @generate_swagger_schema(
@@ -167,21 +300,6 @@ class DepositView(FirebaseAuthenticationMixin, APIView):
             
         },
         required_request_fields=['userId', 'walletId', 'shopId', 'amount', 'phone_number', 'transaction_type', 'currency'],
-        # response_fields={
-        #     'amount': {'type': openapi.TYPE_INTEGER,'description': "Amount to be deposited into the account"},
-        #     'currency': {'type': openapi.TYPE_STRING,'description': "KES"},
-        #     'phone_number': {'type': openapi.TYPE_INTEGER,'description': "Users phone number to enable stk push"},
-        #     'transaction_type': {'type': openapi.TYPE_STRING,'description': "Can either be by M-PESA or CARD"},
-        #     'description': {'type': openapi.TYPE_STRING, 'description': "Description / reason for example topup",},
-        #     'shopId': {'type': openapi.TYPE_STRING, 'description': "User's ShopId",},
-        #     'metadata': {
-        #         'type': openapi.TYPE_ARRAY,
-        #         'description': "Description of Field B",
-        #         'items': openapi.Items(type=openapi.TYPE_STRING),
-        #     },
-        #     'walletId': {'type': openapi.TYPE_STRING, 'description': "Users WalletId"},
-        #     'userId': {'type': openapi.TYPE_STRING,'description': "Unique identification of the user"},
-        # },
         response_example={
             "id": 1,
             "amount": "5",
@@ -195,6 +313,7 @@ class DepositView(FirebaseAuthenticationMixin, APIView):
             "userId":"1",
             "walletId":"1",
             "shopId":"1",
+            "newBalance": 1000,  # Add newBalance to the response example
         }
     )
 
@@ -268,11 +387,21 @@ class DepositView(FirebaseAuthenticationMixin, APIView):
                     metadata=metadata,
                 )
 
-                # Save to Firestore
+                # Fetch the wallet document from Firestore
                 firestore_client = apps.get_app_config('payments').firestore_client
+
+                # Get the current timestamp in ISO format
+                created_at_iso = datetime.now().isoformat()
+
+                # Parse and format the timestamp
+                created_at_datetime = datetime.fromisoformat(created_at_iso)
+                formatted_created_at = created_at_datetime.strftime("%B %d, %Y at %I:%M:%S")
+                # formatted_created_at = formatted_created_at.replace("+0300", "+3")
+
+                # Save to Firestore
                 firestore_client.collection('mytransactions').document(transaction_id).set({
                     'id': transaction_id,
-                    'amount': str(amount),  # Firestore does not support Decimal, so convert to string
+                    'amount': float(amount),  # Firestore does not support Decimal, so convert to string
                     'phone_number': phone_number,
                     'invoiceId': invoice_id,
                     'status': status,
@@ -285,10 +414,15 @@ class DepositView(FirebaseAuthenticationMixin, APIView):
                     'shopId': shopId,
                     'walletId': walletId,
                     'metadata': metadata,
+                    'createdAt': formatted_created_at,
+                    # 'updatedAt': firestore.SERVER_TIMESTAMP,
                 })
 
-                # Return the response from IntaSend
-                return Response(data, status=response.status_code)
+                # Return the response from IntaSend with newBalance
+                return Response({
+                    **data,
+                    # 'newBalance': new_balance  # Include the new balance in the response
+                }, status=response.status_code)
 
             # Error response from IntaSend API
             else:
@@ -298,7 +432,7 @@ class DepositView(FirebaseAuthenticationMixin, APIView):
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-class ProcessOrderView(FirebaseAuthenticationMixin, APIView):
+class ProcessOrderView(APIView):
     @generate_swagger_schema(
         operation_description="API endpoint to process order payment and checkout through mobile money stk push",
         request_fields={
@@ -346,11 +480,11 @@ class ProcessOrderView(FirebaseAuthenticationMixin, APIView):
     )
     def post(self, request):
         try:
-            firebase_user = request.firebase_user
-            userId = firebase_user.get('uid')  # Access the 'uid' of the authenticated user
+            # firebase_user = request.firebase_user
+            # userId = firebase_user.get('uid')  # Access the 'uid' of the authenticated user
 
-            if not userId:
-                return Response({'error': 'userId is required'}, status=400)
+            #if not userId:
+             #   return Response({'error': 'userId is required'}, status=400)
 
             # get request body data items
             amount = request.data.get('amount', 0)
@@ -382,7 +516,7 @@ class ProcessOrderView(FirebaseAuthenticationMixin, APIView):
                     'description': description,
                     'imageUrl': imageUrl,
                     'reference': reference,
-                    'userId': userId,
+                    # 'userId': userId,
                     'shopId': shopId,
                     'walletId': walletId,
                     'metadata': metadata,
@@ -407,11 +541,18 @@ class ProcessOrderView(FirebaseAuthenticationMixin, APIView):
                 createdAt = data.get('created_at')
                 updatedAt = data.get('updated_at')
 
+                # Get the current timestamp in ISO format
+                created_at_iso = datetime.now().isoformat()
+
+                # Parse and format the timestamp
+                created_at_datetime = datetime.fromisoformat(created_at_iso)
+                formatted_created_at = created_at_datetime.strftime("%B %d, %Y at %I:%M:%S")
+
                 # Save part of it to Firestore as transactions
                 firestore_client = apps.get_app_config('payments').firestore_client
                 firestore_client.collection('mytransactions').document(transaction_id).set({
                     'id':transaction_id,
-                    'amount': str(amount),  # Firestore does not support Decimal, so convert to string
+                    'amount': float(amount),  # Firestore does not support Decimal, so convert to string
                     'phone_number': phone_number,
                     'invoiceId': invoice_id,
                     'status': status,
@@ -420,19 +561,19 @@ class ProcessOrderView(FirebaseAuthenticationMixin, APIView):
                     'description': description,
                     'imageUrl': imageUrl,
                     'reference': reference,
-                    'userId': userId,
+                    # 'userId': userId,
                     'shopId': shopId,
                     'walletId': walletId,
                     'metadata':metadata,
-                    # 'createdAt': createdAt,
-                    # 'updatedAt':updatedAt
+                    'createdAt':formatted_created_at,
+                    # 'updatedAt':firestore.SERVER_TIMESTAMP
                 })
 
                 # Save to firestore as orders
                 firestore_client = apps.get_app_config('payments').firestore_client
                 firestore_client.collection('orders').document(transaction_id).set({
                     'id':transaction_id,
-                    'amount': str(amount),  # Firestore does not support Decimal, so convert to string
+                    'amount': float(amount),  # Firestore does not support Decimal, so convert to string
                     'phone_number': phone_number,
                     'invoiceId': invoice_id,
                     'status': False,
@@ -441,7 +582,7 @@ class ProcessOrderView(FirebaseAuthenticationMixin, APIView):
                     'description': description,
                     'imageUrl': imageUrl,
                     'reference': reference,
-                    'userId': userId,
+                    # 'userId': userId,
                     'shopId': shopId,
                     'walletId': walletId,
                     'metadata':metadata,
@@ -450,8 +591,8 @@ class ProcessOrderView(FirebaseAuthenticationMixin, APIView):
                     'customerId':customerId,
                     'items':items,
                     'statusType':"pending",
-                    # 'createdAt': createdAt,
-                    # 'updatedAt':updatedAt
+                    'createdAt': formatted_created_at,
+                    # 'updatedAt':created_at_iso
                 })
 
                 return Response(data, status=response.status_code)
@@ -487,10 +628,18 @@ class BalanceView(FirebaseAuthenticationMixin, APIView):
             if not user_id:
                 return Response({'error': 'userId is required'}, status=400)
 
+            # Log user ID
+            logger.info(f"User ID: {user_id}")
+
             # Get the period from query parameters
             period = request.query_params.get('period', 'today')  # Default to 'today'
             custom_start_date = request.query_params.get('start_date')
             custom_end_date = request.query_params.get('end_date')
+
+            # Log period and custom dates
+            logger.info(f"Period: {period}")
+            logger.info(f"Custom Start Date: {custom_start_date}")
+            logger.info(f"Custom End Date: {custom_end_date}")
 
             # Initialize Firestore client from Django app config
             firestore_client = apps.get_app_config('payments').firestore_client
@@ -499,17 +648,41 @@ class BalanceView(FirebaseAuthenticationMixin, APIView):
             transactions_ref = firestore_client.collection('mytransactions')
             docs = transactions_ref.where(field_path='userId', op_string='==', value=user_id).stream()
 
-            # Convert Firestore documents to a list of transaction dictionaries
-            transactions = [doc.to_dict() for doc in docs]
+            # Convert Firestore documents to a list of transaction dictionaries, filtering out None values
+            transactions = [doc.to_dict() for doc in docs if doc.to_dict() is not None]
+
+            # Log transactions after filtering
+            logger.info(f"Transactions after filtering: {transactions}")
+
+            # Check for missing timestamps
+            for transaction in transactions:
+                if transaction.get('createdAt') is None:
+                    logger.warning(f"Transaction missing timestamp: {transaction}")
+
+            # Convert Firestore Timestamp to Python datetime if necessary
+            for transaction in transactions:
+                if isinstance(transaction.get('createdAt'), Timestamp):  # Correct isinstance check
+                    transaction['createdAt'] = transaction['createdAt'].to_pydatetime()
 
             # Calculate available and pending balances
             availableBalance = (
-                sum(float(transaction.get('amount', 0)) for transaction in transactions if transaction.get('status') == "COMPLETE" and transaction.get('metadata', {}).get('transaction') == "topup") -
-                sum(float(transaction.get('amount', 0)) for transaction in transactions if transaction.get('status') == "COMPLETE" and transaction.get('metadata', {}).get('transaction') == "withdraw")
+                sum(float(transaction.get('amount', 0)) for transaction in transactions 
+                if transaction.get('status') == "COMPLETE" 
+                and transaction.get('metadata', {}).get('transaction') == "topup"
+            )) - (
+                sum(float(transaction.get('amount', 0)) for transaction in transactions 
+                if transaction.get('status') == "COMPLETE" 
+                and transaction.get('metadata', {}).get('transaction') == "withdraw")
             )
+
             pendingBalance = (
-                sum(float(transaction.get('amount', 0)) for transaction in transactions if transaction.get('status') == "PENDING")
-            )
+                sum(float(transaction.get('amount', 0)) for transaction in transactions 
+                if transaction.get('status') == "PENDING"
+            ))
+
+            # Log balances
+            logger.info(f"Available Balance: {availableBalance}")
+            logger.info(f"Pending Balance: {pendingBalance}")
 
             # Helper function to calculate start and end dates based on the period
             def get_date_range(period, custom_start_date=None, custom_end_date=None):
@@ -544,39 +717,18 @@ class BalanceView(FirebaseAuthenticationMixin, APIView):
 
                 return start_date, end_date
 
-            # Calculate income overview for the specified period
-            def calculate_income_overview(transactions, start_date, end_date):
-                # Filter transactions within the specified period
-                filtered_transactions = [
-                    t for t in transactions
-                    if start_date <= t.get('timestamp') <= end_date
-                ]
-
-                # Calculate total top-ups and withdrawals
-                total_topups = sum(
-                    float(t.get('amount', 0)) for t in filtered_transactions
-                    if t.get('status') == "COMPLETE" and t.get('metadata', {}).get('transaction') == "topup"
-                )
-                total_withdrawals = sum(
-                    float(t.get('amount', 0)) for t in filtered_transactions
-                    if t.get('status') == "COMPLETE" and t.get('metadata', {}).get('transaction') == "withdraw"
-                )
-
-                # Calculate net change in available balance
-                net_change = availableBalance - sum(
-                    float(t.get('amount', 0)) for t in filtered_transactions
-                    if t.get('status') == "COMPLETE" and t.get('metadata', {}).get('transaction') == "topup"
-                )
-
-                # Income overview formula
-                income_overview = (net_change + total_withdrawals) - total_topups
-                return income_overview
-
             # Get date range for the specified period
             start_date, end_date = get_date_range(period, custom_start_date, custom_end_date)
 
+            # Log date range
+            logger.info(f"Start Date: {start_date}")
+            logger.info(f"End Date: {end_date}")
+
             # Calculate income overview for the specified period
-            income_overview = calculate_income_overview(transactions, start_date, end_date)
+            income_overview = calculate_income_overview(transactions, start_date, end_date, availableBalance)
+
+            # Log income overview
+            logger.info(f"Income Overview: {income_overview}")
 
             return Response(
                 {
@@ -591,31 +743,34 @@ class BalanceView(FirebaseAuthenticationMixin, APIView):
 
         # Error handling
         except Exception as e:
+            logger.error(f"Error in BalanceView: {str(e)}", exc_info=True)
             return Response({'error': str(e)}, status=400)
 
 # ----- Transactions View -----
 class TransactionView(FirebaseAuthenticationMixin, APIView):
+    pagination_class = TransactionPagination
+
     @generate_swagger_schema(
-        operation_description="API endpoint to get all the transaction performed by a user",
+        operation_description="API endpoint to get all the transactions performed by a user",
         response_example={
             "id": 1,
-            "transctionId":"1",
+            "transactionId": "1",
             "amount": "5",
             "currency": "KES",
-            "description":"Top Up",
+            "description": "Top Up",
             "invoiceId": "YSHGD67",
-            "phone_number":"25472345678",
-            "status":"COMPLETE",
-            "metadata": {"type":"pending"},
-            "imageUrl":"https://image.com/",
-            "transcation_type":"M-PESA",
-            "userId":"1",
-            "walletId":"1",
-            "shopId":"1",
-            "name":"James Doe",
-            "orderId":"1",
-            "customerId":"1",
-            "statusType":"pending"
+            "phone_number": "25472345678",
+            "status": "COMPLETE",
+            "metadata": {"type": "pending"},
+            "imageUrl": "https://image.com/",
+            "transaction_type": "M-PESA",
+            "userId": "1",
+            "walletId": "1",
+            "shopId": "1",
+            "name": "James Doe",
+            "orderId": "1",
+            "customerId": "1",
+            "statusType": "pending"
         }
     )
     def get(self, request):
@@ -625,7 +780,7 @@ class TransactionView(FirebaseAuthenticationMixin, APIView):
             user_id = firebase_user.get('uid')  # Correctly fetch the user UID
 
             if not user_id:
-                return Response({'error': 'userId is required'}, status=400)
+                return Response({'error': 'userId is required'}, status=status.HTTP_400_BAD_REQUEST)
 
             # Access Firestore client
             firestore_client = apps.get_app_config('payments').firestore_client
@@ -643,8 +798,12 @@ class TransactionView(FirebaseAuthenticationMixin, APIView):
                     if transaction_data['status'] == "COMPLETE":
                         transactions.append(transaction_data)
 
-            # Return all transactions with status "COMPLETE"
-            return Response(transactions, status=status.HTTP_200_OK)
+            # Paginate the transactions
+            paginator = self.pagination_class()
+            paginated_transactions = paginator.paginate_queryset(transactions, request)
+
+            # Return paginated transactions
+            return paginator.get_paginated_response(paginated_transactions)
 
         # Error handling
         except Exception as e:
@@ -845,9 +1004,7 @@ class CardDepositView(FirebaseAuthenticationMixin, APIView):
             },
             'walletId': {'type': openapi.TYPE_STRING, 'description': "Users WalletId"},
             'userId': {'type': openapi.TYPE_STRING,'description': "Unique identification of the user"},
-            
         },
-        # required_request_fields=lambda fields: list(fields.keys()),
         response_example={
             "id": 1,
             "amount": "5",
@@ -888,7 +1045,7 @@ class CardDepositView(FirebaseAuthenticationMixin, APIView):
             'userId': userId,
             'shopId': shopId,
             'walletId': walletId,
-            "metadata":metadata,
+            "metadata": metadata,
         }
 
         # Send request to IntaSend API
@@ -896,8 +1053,9 @@ class CardDepositView(FirebaseAuthenticationMixin, APIView):
 
         if response.status_code == 201:
             data = response.json()
-            id = data.get("id")
-            transaction_id = str(id)
+            checkout_id = data.get("id")
+            invoice_id = data.get("signature")
+            transaction_id = str(checkout_id)
 
             # Save to Django's database
             transaction = Transactions.objects.create(
@@ -913,11 +1071,19 @@ class CardDepositView(FirebaseAuthenticationMixin, APIView):
                 metadata=metadata,
             )
 
+            # Get the current timestamp in ISO format
+            created_at_iso = datetime.now().isoformat()
+
+            # Parse and format the timestamp
+            created_at_datetime = datetime.fromisoformat(created_at_iso)
+            formatted_created_at = created_at_datetime.strftime("%B %d, %Y at %I:%M:%S %p UTC%z")
+            formatted_created_at = formatted_created_at.replace("+0300", "+3")
+
             # Save to Firestore
             firestore_client = apps.get_app_config('payments').firestore_client
             firestore_client.collection('mytransactions').document(transaction_id).set({
-                'id':transaction_id,
-                'amount': str(amount),
+                'id': transaction_id,
+                'amount': float(amount),
                 'status': "PENDING",
                 'currency': currency,
                 'type': transaction_type,
@@ -925,59 +1091,22 @@ class CardDepositView(FirebaseAuthenticationMixin, APIView):
                 'userId': userId,
                 'shopId': shopId,
                 'walletId': walletId,
-                'metadata':metadata,
-
-                # 'createdAt': createdAt,
-                # 'updatedAt':updatedAt
+                'invoiceId':invoice_id,
+                'metadata': metadata,
+                'createdAt': firestore.SERVER_TIMESTAMP,
+                # 'updatedAt': firestore.SERVER_TIMESTAMP,
             })
-            return Response(data, status=response.status_code)
 
+            # Trigger Celery task to check transaction status
+            # check_transaction_status.delay(checkout_id, invoice_id, walletId, amount)
+
+            return Response(data, status=response.status_code)
         else:
             return Response({
                 'status': 'Payment Initiation failed',
                 'detail': response.json(),
                 'response_text': response.text
             }, status=response.status_code)
-
-# Check if Card Deposit is Successfull
-class CheckoutStatus(FirebaseAuthenticationMixin, APIView):
-    @generate_swagger_schema(
-        operation_description="API endpoint to check if Card Deposit is successfull",
-        request_fields={
-            'checkout_id': {'type': openapi.TYPE_STRING,'description': "checkout id generated from the card deposit transaction"},
-            'signature': {'type': openapi.TYPE_STRING,'description': "unique signature generated from the card deposit transaction"},
-        },
-        # required_request_fields=lambda fields: list(fields.keys()),
-    )
-    def post(self, request):
-        # prepare checkout details
-        firebase_user = request.firebase_user
-        user_id = firebase_user.get('uid')  # Correctly fetch the user UID
-
-        if not user_id:
-            return Response({'error': 'userId is required'}, status=400)
-
-        checkout_id = request.data.get("checkout_id")
-        signature = request.data.get("signature")
-
-        # prepare json data
-        intasend_data = {
-            'public_key': settings.INTASEND_API_KEY,
-            "checkout_id":"5d405859-ca38-4821-a95e-5d6553d1a9b3",
-            "signature":"eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzY29wZSI6ImV4cHJlc3MtY2hlY2tvdXQiLCJpc3MiOiJJbnRhU2VuZCBTb2x1dGlvbnMgTGltaXRlZCIsImF1ZCI6WyI1ZDQwNTg1OS1jYTM4LTQ4MjEtYTk1ZS01ZDY1NTNkMWE5YjMiXSwiaWF0IjoxNzIzNTE1OTk4LCJleHAiOjE3MjM1MTk1OTgsImFjY291bnRJRCI6IlBRVzlERFEiLCJyZWZlcmVuY2UiOiI1ZDQwNTg1OS1jYTM4LTQ4MjEtYTk1ZS01ZDY1NTNkMWE5YjMifQ._Zhl9ZdMZ8mueoFlG9nr8DQEPkfjbFajDeypXhXOyRo"
-        }
-
-        # Send request to IntaSend API
-        response = requests.post(
-                        "https://sandbox.intasend.com/api/v1/checkout/details/",
-                        json=intasend_data
-                    )
-        if response.status_code == 200:
-            data = response.json()
-            return Response(data, status=response.status_code)
-        else:
-            data = response.json()
-            return Response(data, status=response.status_code)
 
 class TransactionDetailView(FirebaseAuthenticationMixin, APIView):
     @generate_swagger_schema(

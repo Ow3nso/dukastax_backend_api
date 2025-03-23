@@ -13,9 +13,9 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'backend_payment_apis.settings')
 app = Celery('backend_payment_apis')
 
 app.conf.beat_schedule = {
-    'update-transaction-states-every-3-seconds': {
+    'update-transaction-states-every-1-seconds': {
         'task': 'payments.tasks.update_transaction_states',
-        'schedule': timedelta(seconds=3)  # every 3 seconds
+        'schedule': timedelta(seconds=1)  # every 3 seconds
     },
 }
 
