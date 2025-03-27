@@ -370,22 +370,22 @@ class DepositView(FirebaseAuthenticationMixin, APIView):
                 updatedAt = data.get('updated_at')
 
                 # Save transaction details to Django database
-                transaction = Transactions.objects.create(
-                    id=transaction_id,
-                    amount=amount,
-                    phone_number=phone_number,
-                    invoice_id=invoice_id,
-                    status=status,
-                    currency=currency,
-                    type=transaction_type,
-                    description=description,
-                    imageUrl=imageUrl,
-                    reference=reference,
-                    userId=userId,  # Use userId from Firebase
-                    shopId=shopId,
-                    walletId=walletId,
-                    metadata=metadata,
-                )
+                # transaction = Transactions.objects.create(
+                #     id=transaction_id,
+                #     amount=amount,
+                #     phone_number=phone_number,
+                #     invoice_id=invoice_id,
+                #     status=status,
+                #     currency=currency,
+                #     type=transaction_type,
+                #     description=description,
+                #     imageUrl=imageUrl,
+                #     reference=reference,
+                #     userId=userId,  # Use userId from Firebase
+                #     shopId=shopId,
+                #     walletId=walletId,
+                #     metadata=metadata,
+                # )
 
                 # Fetch the wallet document from Firestore
                 firestore_client = apps.get_app_config('payments').firestore_client
@@ -785,9 +785,21 @@ class TransactionView(FirebaseAuthenticationMixin, APIView):
             # Access Firestore client
             firestore_client = apps.get_app_config('payments').firestore_client
 
-            # Fetch transactions for the specific user
+            # First, get all wallets belonging to this user
+            wallets_ref = firestore_client.collection('wallet')
+            wallet_docs = wallets_ref.where('userId', '==', user_id).stream()
+            
+            # Get all wallet IDs for this user
+            wallet_ids = [wallet.id for wallet in wallet_docs]
+            
+            if not wallet_ids:
+                return Response({'message': 'No wallets found for this user'}, status=status.HTTP_404_NOT_FOUND)
+
+            # Fetch transactions for the user's wallets
             transactions_ref = firestore_client.collection('mytransactions')
-            docs = transactions_ref.where('userId', '==', user_id).stream()
+            
+            # Create a query for transactions where walletId is in the user's wallet IDs
+            docs = transactions_ref.where('walletId', 'in', wallet_ids).stream()
 
             # Convert Firestore documents to a list of transaction dictionaries
             transactions = []
@@ -797,6 +809,9 @@ class TransactionView(FirebaseAuthenticationMixin, APIView):
                     transaction_data['id'] = doc.id  # Add the document ID to the data
                     if transaction_data['status'] == "COMPLETE":
                         transactions.append(transaction_data)
+
+            # Sort transactions by createdAt in descending order (newest first)
+            transactions.sort(key=lambda x: datetime.strptime(x['createdAt'], '%B %d, %Y at %H:%M:%S'), reverse=True)
 
             # Paginate the transactions
             paginator = self.pagination_class()
@@ -901,20 +916,20 @@ class WithdrawalView(FirebaseAuthenticationMixin, APIView):
 
         # Start transaction
         try:
-            transaction = Transactions.objects.create(
-                amount=amount,
-                currency=currency,
-                phone_number=account,
-                status='COMPLETE',
-                type=transaction_type,
-                description=description,
-                imageUrl=imageUrl,
-                reference=reference,
-                userId=userId,
-                shopId=shopId,
-                walletId=walletId,
-                metadata=metadata,
-            )
+            # transaction = Transactions.objects.create(
+            #     amount=amount,
+            #     currency=currency,
+            #     phone_number=account,
+            #     status='COMPLETE',
+            #     type=transaction_type,
+            #     description=description,
+            #     imageUrl=imageUrl,
+            #     reference=reference,
+            #     userId=userId,
+            #     shopId=shopId,
+            #     walletId=walletId,
+            #     metadata=metadata,
+            # )
 
             # Save transaction to Firestore\
             firestore_client = apps.get_app_config('payments').firestore_client
@@ -1058,18 +1073,18 @@ class CardDepositView(FirebaseAuthenticationMixin, APIView):
             transaction_id = str(checkout_id)
 
             # Save to Django's database
-            transaction = Transactions.objects.create(
-                id=transaction_id,
-                amount=amount,
-                status="PENDING",
-                currency=currency,
-                type=transaction_type,
-                description=description,
-                userId=userId,
-                shopId=shopId,
-                walletId=walletId,
-                metadata=metadata,
-            )
+            # transaction = Transactions.objects.create(
+            #     id=transaction_id,
+            #     amount=amount,
+            #     status="PENDING",
+            #     currency=currency,
+            #     type=transaction_type,
+            #     description=description,
+            #     userId=userId,
+            #     shopId=shopId,
+            #     walletId=walletId,
+            #     metadata=metadata,
+            # )
 
             # Get the current timestamp in ISO format
             created_at_iso = datetime.now().isoformat()
