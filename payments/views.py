@@ -680,7 +680,7 @@ class ProcessOrderView(APIView):
                     'customerId':customerId,
                     'items':items,
                     'statusType':"pending",
-                    'createdAt': formatted_created_at,
+                    'createdAt': firestore.SERVER_TIMESTAMP,
                     # 'updatedAt':created_at_iso
                 })
 
