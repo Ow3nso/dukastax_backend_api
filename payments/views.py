@@ -490,7 +490,7 @@ class DepositView(FirebaseAuthenticationMixin, APIView):
                     'amount': float(amount),  # Firestore does not support Decimal, so convert to string
                     'phone_number': phone_number,
                     'invoiceId': invoice_id,
-                    'status': status,
+                    'status': 'COMPLETE',
                     'currency': currency,
                     'type': transaction_type,
                     'description': description,
@@ -644,7 +644,7 @@ class ProcessOrderView(APIView):
                     'amount': float(amount),  # Firestore does not support Decimal, so convert to string
                     'phone_number': phone_number,
                     'invoiceId': invoice_id,
-                    'status': status,
+                    'status': 'COMPLETE',
                     'currency': currency,
                     'type': transaction_type,
                     'description': description,
