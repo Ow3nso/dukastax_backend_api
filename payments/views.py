@@ -7,6 +7,8 @@ import datetime
 import subprocess
 import requests
 import logging
+import random
+from datetime import datetime
 
 from decimal import Decimal
 from django.apps import apps
@@ -215,7 +217,91 @@ def calculate_income_overview(transactions, start_date, end_date, availableBalan
 
     # Income overview formula
     income_overview = (net_change + total_withdrawals) - total_topups
-    return income_overview
+    
+    # Prepare chart data based on period
+    period_days = (end_date - start_date).days
+    chart_data = {}
+    
+    if period_days == 0:  # Today - hourly data
+        hourly_data = {str(hour): {
+            'available': 0.0,
+            'pending': 0.0,
+            'topups': 0.0,
+            'withdrawals': 0.0
+        } for hour in range(24)}
+        
+        for t in filtered_transactions:
+            hour = t['createdAt'].hour
+            amount = float(t.get('amount', 0))
+            status = t.get('status')
+            transaction_type = t.get('metadata', {}).get('transaction')
+            
+            if status == "COMPLETE":
+                if transaction_type == "topup":
+                    hourly_data[str(hour)]['available'] += amount
+                    hourly_data[str(hour)]['topups'] += amount
+                elif transaction_type == "withdraw":
+                    hourly_data[str(hour)]['available'] -= amount
+                    hourly_data[str(hour)]['withdrawals'] += amount
+            elif status == "PENDING":
+                hourly_data[str(hour)]['pending'] += amount
+        
+        chart_data = {
+            'type': 'hourly',
+            'data': hourly_data
+        }
+        
+    elif period_days <= 7:  # Weekly data
+        daily_data = {str(day): {
+            'available': 0.0,
+            'pending': 0.0,
+            'topups': 0.0,
+            'withdrawals': 0.0
+        } for day in range(7)}  # 0=Monday to 6=Sunday
+        
+        for t in filtered_transactions:
+            day = t['createdAt'].weekday()  # Monday=0, Sunday=6
+            amount = float(t.get('amount', 0))
+            status = t.get('status')
+            transaction_type = t.get('metadata', {}).get('transaction')
+            
+            if status == "COMPLETE":
+                if transaction_type == "topup":
+                    daily_data[str(day)]['available'] += amount
+                    daily_data[str(day)]['topups'] += amount
+                elif transaction_type == "withdraw":
+                    daily_data[str(day)]['available'] -= amount
+                    daily_data[str(day)]['withdrawals'] += amount
+            elif status == "PENDING":
+                daily_data[str(day)]['pending'] += amount
+        
+        chart_data = {
+            'type': 'daily',
+            'data': daily_data
+        }
+    
+    # Calculate comparison percentage (simple example)
+    comparison_percentage = 0.0
+    if total_topups > 0:
+        comparison_percentage = ((income_overview - total_topups) / total_topups) * 100
+        comparison_text = f"{abs(comparison_percentage):.1f}% {'higher' if comparison_percentage >= 0 else 'lower'} than last period"
+    else:
+        comparison_text = "No comparison available"
+
+    return {
+        'income_overview': income_overview,
+        'income_comparison': comparison_text,
+        'chart_data': chart_data,
+        'start_date': start_date.strftime('%Y-%m-%d'),
+        'end_date': end_date.strftime('%Y-%m-%d'),
+        'available_balance': availableBalance,
+        'pending_balance': sum(
+            float(t.get('amount', 0)) for t in filtered_transactions
+            if t.get('status') == "PENDING"
+        ),
+        'total_topups': total_topups,
+        'total_withdrawals': total_withdrawals
+    }
 
 @csrf_exempt
 def signup(request):
@@ -451,7 +537,6 @@ class ProcessOrderView(APIView):
             'walletId': {'type': openapi.TYPE_STRING, 'description': "Users WalletId"},
             'userId': {'type': openapi.TYPE_STRING,'description': "Unique identification of the user"},
             'name': {'type': openapi.TYPE_STRING, 'description': "Full name of the customer"},
-            'orderId': {'type': openapi.TYPE_STRING, 'description': "Unique identification of an order by its id"},
             'customerId': {'type': openapi.TYPE_STRING, 'description': "Customer unique id"},
             'items': {'type': openapi.TYPE_STRING, 'description': "Users WalletId"},
             'statusType': {'type': openapi.TYPE_STRING, 'description': "The status of a transcation / order payment which can either be pending, ontransit, delivered, etc"},
@@ -473,7 +558,7 @@ class ProcessOrderView(APIView):
             "walletId":"1",
             "shopId":"1",
             "name":"James Doe",
-            "orderId":"1",
+            "orderId":"LUKHU-270325-0045",
             "customerId":"1",
             "statusType":"pending"
         }
@@ -499,10 +584,14 @@ class ProcessOrderView(APIView):
             walletId = request.data.get('walletId')
             # new order fields
             name = request.data.get('name')
-            orderId = request.data.get('orderId')
             customerId = request.data.get('customerId')
             items = request.data.get('items')
             statusType = request.data.get('statusType')
+
+            # Generate unique order ID
+            current_date = datetime.now().strftime("%d%m%y")  # DDMMYY format
+            random_code = f"{random.randint(0, 9999):04d}"  # 4-digit random number with leading zeros
+            orderId = f"LUKHU-{current_date}-{random_code}"
 
             # Post Request
             response = requests.post(
